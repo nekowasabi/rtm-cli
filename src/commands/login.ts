@@ -3,6 +3,7 @@ import { AuthError } from "../utils/errors.ts";
 import { EnvManager } from "../utils/env.ts";
 import { Config, ConfigManager } from "../core/config.ts";
 import { BrowserManager } from "../core/browser.ts";
+import { Logger } from "../utils/logger.ts";
 import { Cookie } from "playwright";
 
 export interface LoginOptions {
@@ -10,6 +11,7 @@ export interface LoginOptions {
   password?: string;
   save?: boolean;
   headless?: boolean;
+  logger: Logger;
 }
 
 export interface LoginResult {
@@ -27,14 +29,17 @@ export class LoginCommand {
   private envManager: EnvManager;
   private authPath?: string;
   private sessionCookies: Cookie[] = [];
+  private logger: Logger;
 
-  constructor(authPath?: string) {
+  constructor(authPath?: string, logger?: Logger) {
     this.authManager = new AuthManager();
     this.envManager = new EnvManager();
     this.authPath = authPath;
+    this.logger = logger || new Logger();
   }
 
   async execute(options: LoginOptions): Promise<LoginResult> {
+    this.logger = options.logger;
     if (!options.username || !options.password) {
       throw new AuthError("ユーザー名とパスワードが必要です");
     }
@@ -72,7 +77,8 @@ export class LoginCommand {
     };
   }
 
-  async executeWithStoredCredentials(options: { headless?: boolean }): Promise<LoginResult> {
+  async executeWithStoredCredentials(options: { headless?: boolean, logger: Logger }): Promise<LoginResult> {
+    this.logger = options.logger;
     const authPath = this.getAuthPath();
     
     if (!await this.authManager.hasStoredCredentials(authPath)) {
@@ -111,7 +117,8 @@ export class LoginCommand {
     }
   }
 
-  async executeWithEnvCredentials(options: { headless?: boolean }): Promise<LoginResult> {
+  async executeWithEnvCredentials(options: { headless?: boolean, logger: Logger }): Promise<LoginResult> {
+    this.logger = options.logger;
     if (!this.envManager.hasCompleteCredentials()) {
       throw new AuthError("環境変数に完全な認証情報が設定されていません");
     }
@@ -141,12 +148,13 @@ export class LoginCommand {
     };
   }
 
-  async executeInteractive(input: InteractiveInput, options: { headless?: boolean }): Promise<LoginResult> {
+  async executeInteractive(input: InteractiveInput, options: { headless?: boolean, logger: Logger }): Promise<LoginResult> {
     return await this.execute({
       username: input.username,
       password: input.password,
       save: false,
-      headless: options.headless
+      headless: options.headless,
+      logger: options.logger,
     });
   }
 
@@ -154,9 +162,9 @@ export class LoginCommand {
     const browserManager = new BrowserManager();
     
     try {
-      console.log(`ログイン試行: ${username}, ヘッドレス: ${headless !== false}`);
+      this.logger.info(`ログイン試行: ${username}, ヘッドレス: ${headless !== false}`);
       
-      // ブラウザを起動
+      // ブラウザを��動
       await browserManager.launch({ headless: headless !== false });
       const page = await browserManager.newPage();
       
@@ -184,14 +192,14 @@ export class LoginCommand {
           cookie.domain.includes('rememberthemilk.com')
         );
         
-        console.log(`ログイン成功！${this.sessionCookies.length}個のクッキーを取得しました。`);
+        this.logger.info(`ログイン成功！${this.sessionCookies.length}個のクッキーを取得しました��`);
         return true;
         
       } catch (timeoutError) {
         // ログイン失敗の可能性：エラーメッセージをチェック
         const errorElements = await page.locator('.alert-danger, .error, [class*="error"]').count();
         if (errorElements > 0) {
-          console.error("ログイン失敗：認証情報が正しくありません");
+          this.logger.error("ログイン失敗：認証情報が正しくありません");
           return false;
         }
         
@@ -203,16 +211,16 @@ export class LoginCommand {
           this.sessionCookies = cookies.filter(cookie => 
             cookie.domain.includes('rememberthemilk.com')
           );
-          console.log(`ログイン成功！${this.sessionCookies.length}個のクッキーを取得しました。`);
+          this.logger.info(`ログイン成功！${this.sessionCookies.length}個のクッキーを取得しました。`);
           return true;
         }
         
-        console.error("ログイン失敗：予期しないページです");
+        this.logger.error("ログイン失敗：予期しないページです");
         return false;
       }
       
     } catch (error) {
-      console.error("ログイン中にエラーが発生しました:", error);
+      this.logger.error(`ログイン中にエラーが発生しました: ${error}`);
       return false;
     } finally {
       await browserManager.close();
@@ -235,9 +243,9 @@ export class LoginCommand {
       // 実際のセッションクッキーを設定
       if (this.sessionCookies.length > 0) {
         config.cookies = this.sessionCookies;
-        console.log(`${this.sessionCookies.length}個のクッキーを設定ファイルに保存しました。`);
+        this.logger.info(`${this.sessionCookies.length}個のクッキーを設定ファイルに保存しました。`);
       } else {
-        console.warn("保存するセッションクッキーがありません。");
+        this.logger.warn("保存するセッションクッキーがありません。");
         return;
       }
       
@@ -252,7 +260,7 @@ export class LoginCommand {
       // 設定ファイルを保存
       await configManager.save(config, configPath);
     } catch (error) {
-      console.warn("セッション情報の保存に失敗しました:", error);
+      this.logger.warn(`セッション情報の保存に失敗しました: ${error}`);
     }
   }
 

@@ -1,7 +1,9 @@
 import { AuthManager, SessionData } from "../core/auth.ts";
+import { Logger } from "../utils/logger.ts";
 
 export interface StatusOptions {
   verbose?: boolean;
+  logger: Logger;
   // テスト用のモックオプション
   mockLoggedIn?: boolean;
   mockUser?: string;
@@ -26,13 +28,16 @@ export interface StatusResult {
 export class StatusCommand {
   private authManager: AuthManager;
   private authPath?: string;
+  private logger: Logger;
 
-  constructor(authPath?: string) {
+  constructor(authPath?: string, logger?: Logger) {
     this.authManager = new AuthManager();
     this.authPath = authPath;
+    this.logger = logger || new Logger();
   }
 
   async execute(options: StatusOptions): Promise<StatusResult> {
+    this.logger = options.logger;
     // テスト用のモック処理
     if (options.mockLoggedIn !== undefined) {
       return await this.executeMock(options);

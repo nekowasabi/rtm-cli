@@ -6,13 +6,11 @@ import { RTMError } from "../utils/errors.ts";
 import { LoginCommand } from "./login.ts";
 import { EnvManager } from "../utils/env.ts";
 
-const logger = new Logger();
-
 export const tasksCommand = {
   name: "tasks",
   description: "指定されたリストのタスクを取得します。",
-  action: async (options: { config: Config; listId: string }) => {
-    const { config, listId } = options;
+  action: async (options: { config: Config; listId: string; logger: Logger }) => {
+    const { config, listId, logger } = options;
     const authManager = new AuthManager();
 
     // ログイン状態をチェックし、必要に応じて自動ログイン
@@ -22,9 +20,9 @@ export const tasksCommand = {
       const envManager = new EnvManager();
       if (envManager.hasCompleteCredentials()) {
         logger.info("環境変数から認証情報を使用してログインします。");
-        const loginCommand = new LoginCommand();
+        const loginCommand = new LoginCommand(undefined, logger);
         try {
-          await loginCommand.executeWithEnvCredentials({ headless: true });
+          await loginCommand.executeWithEnvCredentials({ headless: true, logger });
           
           // 設定を再読み込み
           const { ConfigManager } = await import("../core/config.ts");
@@ -67,125 +65,20 @@ export const tasksCommand = {
       await page.waitForSelector("div.b-gN", { timeout: 30000 });
       await page.waitForLoadState('networkidle');
 
-      // まず複数のセレクタでタスク要素を検索
-      const possibleSelectors = [
-        "div.b-BT-ib-KS",           // 元のセレクタ
-        "span#b-ib-dS-vQ",          // ユーザー指定のセレクタ
-        ".task-item",               // 一般的なタスクアイテム
-        "[data-task-id]",           // タスクIDを持つ要素
-        ".task-row",                // タスク行
-        ".rtm-task",                // RTM固有のタスククラス
-        ".task-name",               // タスク名要素
-        ".task-title",              // タスクタイトル
-        ".task-content",            // タスクコンテンツ
-        "li[class*='task']",        // タスクを含むリストアイテム
-        "div[class*='task']",       // タスクを含むdiv
-        ".b-BT-ib-KS .task",        // 親要素内のタスク
-        ".b-BT-ib-KS > *",          // 直接の子要素
-        "span[id*='b-ib-dS']",      // 類似IDパターン
-      ];
+      const tasks = await page.evaluate(() => {
+        const taskElements = document.querySelectorAll('span.b-ib-dS-vQ');
+        return Array.from(taskElements).map(el => el.textContent?.trim() || '');
+      });
 
-      let taskElements: any[] = [];
-      let usedSelector = "";
-
-      for (const selector of possibleSelectors) {
-        try {
-          logger.info(`セレクタ "${selector}" でタスク要素を検索中...`);
-          const elements = await page.locator(selector).all();
-          if (elements.length > 0) {
-            taskElements = elements;
-            usedSelector = selector;
-            logger.info(`セレクタ "${selector}" で ${elements.length} 個の要素が見つかりました！`);
-            break;
-          }
-        } catch (error) {
-          // このセレクタでは見つからなかった
-          continue;
-        }
-      }
-
-      if (taskElements.length === 0) {
-        logger.warn("どのセレクタでもタスク要素が見つかりませんでした。ページ構造を調査します...");
+      if (tasks.length > 0) {
+        logger.info(`${tasks.length}個のタスクが見つかりました！`);
         
-        // ページの構造をデバッグ出力
-        const pageContent = await page.content();
-        const lines = pageContent.split('\n');
-        const relevantLines = lines.filter(line => 
-          line.includes('task') || 
-          line.includes('talestune') || 
-          line.includes('sim') || 
-          line.includes('メイン')
-        );
+        const uniqueTasks = [...new Set(tasks.filter(t => t))];
         
-        logger.info("関連するHTML構造:");
-        for (const line of relevantLines.slice(0, 10)) {
-          logger.info("  " + line.trim());
-        }
-        
-        // 元のセレクタで再試行
-        taskElements = await page.locator("div.b-BT-ib-KS").all();
-        usedSelector = "div.b-BT-ib-KS";
-      }
-      
-      if (taskElements.length > 0) {
-        logger.info(`${taskElements.length}個のタスク要素が見つかりました！`);
-        
-        const tasks: string[] = [];
-        
-        for (let i = 0; i < taskElements.length; i++) {
-          const element = taskElements[i];
-          try {
-            const taskText = await element.textContent({ timeout: 5000 });
-            logger.info(`要素 ${i + 1}: "${taskText}"`);
-            
-            if (taskText && taskText.trim()) {
-              // タスクテキストをクリーンアップ（改行や余分な空白を除去）
-              const cleanText = taskText.trim().replace(/\s+/g, ' ');
-              
-              // パターンマッチングで個別タスクを検出
-              // ユーザー要求に基づき、最初の2つのタスクのみを取得
-              const taskPattern = /([^→]+→)/g;
-              const matches = cleanText.match(taskPattern);
-              
-              if (matches && matches.length >= 2) {
-                // 最初の2つのタスクのみを取得（ユーザー要求に基づく）
-                logger.info(`複数のタスクを検出。最初の2つを取得します。`);
-                
-                // 最初のタスク
-                const firstTask = matches[0].trim();
-                tasks.push(firstTask);
-                logger.info(`  - タスク1: "${firstTask}"`);
-                
-                // 2つ目以降を結合
-                const remainingParts = matches.slice(1);
-                const secondTask = remainingParts.join('').trim();
-                if (secondTask && secondTask !== '→') {
-                  tasks.push(secondTask);
-                  logger.info(`  - タスク2: "${secondTask}"`);
-                }
-              } else if (matches && matches.length === 1) {
-                // 1つのタスクのみ
-                tasks.push(cleanText);
-                logger.info(`  - 単一タスク: "${cleanText}"`);
-              } else {
-                // パターンにマッチしない場合はそのまま追加
-                tasks.push(cleanText);
-                logger.info(`  - そのまま追加: "${cleanText}"`);
-              }
-            }
-          } catch (error) {
-            logger.warn("一部のタスク要素の取得に失敗しました: " + (error instanceof Error ? error.message : String(error)));
-          }
-        }
-        
-        // 重複を除去
-        const uniqueTasks = [...new Set(tasks)];
-        
-        // JSON配列として出力
         const result = {
           listId: listId,
           taskCount: uniqueTasks.length,
-          tasks: uniqueTasks
+          tasks: uniqueTasks,
         };
         
         console.log(JSON.stringify(result, null, 2));
@@ -222,7 +115,7 @@ export const tasksCommand = {
       if (error instanceof RTMError) {
         logger.error(error.message);
       } else if (error instanceof Error) {
-        logger.error(`予期せぬエラーが発生しま��た: ${error.message}`);
+        logger.error(`予期せぬエラーが発生しました: ${error.message}`);
       } else {
         logger.error(`予期せぬエラーが発生しました: ${String(error)}`);
       }

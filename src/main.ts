@@ -19,8 +19,8 @@ function parseArgs(args: string[]): { command?: string; subcommand?: string; opt
     
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
-      if (key === "help") {
-        options.help = true;
+      if (key === "help" || key === "debug") {
+        options[key] = true;
       } else if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
         options[key] = args[++i];
       } else {
@@ -104,7 +104,7 @@ function showHelp(command?: string) {
 }
 
 async function handleLoginCommand(options: Record<string, any>) {
-  const command = new LoginCommand();
+  const command = new LoginCommand(undefined, logger);
   const envManager = new EnvManager();
   
   try {
@@ -119,7 +119,7 @@ async function handleLoginCommand(options: Record<string, any>) {
     
     if (useEnv) {
       // 環境変数から認証情報を使用
-      result = await command.executeWithEnvCredentials({ headless });
+      result = await command.executeWithEnvCredentials({ headless, logger });
     } else if (interactive || (!username && !password)) {
       // インタラクティブモード
       console.log("Remember the Milkにログインします。");
@@ -140,18 +140,19 @@ async function handleLoginCommand(options: Record<string, any>) {
       result = await command.executeInteractive({
         username: usernameInput,
         password: passwordInput
-      }, { headless });
+      }, { headless, logger });
     } else if (username && password) {
       // コマンドライン引数から認証情報を使用
       result = await command.execute({
         username,
         password,
         save,
-        headless
+        headless,
+        logger,
       });
     } else {
       // 保存された認証情報を使用
-      result = await command.executeWithStoredCredentials({ headless });
+      result = await command.executeWithStoredCredentials({ headless, logger });
     }
     
     console.log(result.message);
@@ -185,12 +186,12 @@ async function handleLogoutCommand(options: Record<string, any>) {
 }
 
 async function handleStatusCommand(options: Record<string, any>) {
-  const command = new StatusCommand();
+  const command = new StatusCommand(undefined, logger);
   
   try {
     const verbose = options.v || options.verbose || false;
     
-    const result = await command.execute({ verbose });
+    const result = await command.execute({ verbose, logger });
     
     console.log(result.message);
     
@@ -245,7 +246,8 @@ async function handleTasksCommand(listId: string, options: Record<string, any>) 
     
     await tasksCommand.action({
       config,
-      listId
+      listId,
+      logger,
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -261,26 +263,10 @@ if (import.meta.main) {
     const { command, subcommand, options } = parseArgs(Deno.args);
     
     // ログレベルの設定
-    if (options.v || options.verbose) {
+    if (options.debug || options.v || options.verbose) {
       logger.setLevel(LogLevel.DEBUG);
     } else {
-      const logLevel = options["log-level"] || "info";
-      switch (logLevel) {
-        case "debug":
-          logger.setLevel(LogLevel.DEBUG);
-          break;
-        case "info":
-          logger.setLevel(LogLevel.INFO);
-          break;
-        case "warn":
-          logger.setLevel(LogLevel.WARN);
-          break;
-        case "error":
-          logger.setLevel(LogLevel.ERROR);
-          break;
-        default:
-          logger.setLevel(LogLevel.INFO);
-      }
+      logger.setLevel(LogLevel.WARN);
     }
     
     if (options.help) {

@@ -25,7 +25,7 @@
   ],
   "compilerOptions": {
     "allowJs": true,
-    "lib": ["deno.window"],
+    "lib": ["deno.ns", "dom"],
     "strict": true
   }
 }
