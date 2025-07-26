@@ -7,12 +7,15 @@ export interface UrlCommandOptions {
   url: string;
   headless?: boolean;
   logger?: Logger;
+  extractTasks?: boolean;  // タスクを抽出するかどうか
 }
 
 export interface UrlCommandResult {
   success: boolean;
   message: string;
   error?: string;
+  url?: string;
+  opened?: boolean;
 }
 
 export class UrlCommand {
@@ -31,6 +34,14 @@ export class UrlCommand {
 
     // URLバリデーション
     if (!options.url) {
+      const errorResult = {
+        url: "",
+        opened: false,
+        error: "URLを指定してください",
+        timestamp: new Date().toISOString()
+      };
+      console.log(JSON.stringify(errorResult, null, 2));
+      
       return {
         success: false,
         message: "URLが指定されていません",
@@ -59,6 +70,14 @@ export class UrlCommand {
 
     // セッションの確認
     if (!config.cookies || config.cookies.length === 0) {
+      const errorResult = {
+        url: targetUrl,
+        opened: false,
+        error: "ログインが必要です。先に `rtm login` コマンドでログインしてください",
+        timestamp: new Date().toISOString()
+      };
+      console.log(JSON.stringify(errorResult, null, 2));
+      
       return {
         success: false,
         message: "ログインが必要です",
@@ -92,6 +111,33 @@ export class UrlCommand {
 
       this.logger.info("URLが正常に開かれました");
 
+      // タスクを抽出する場合
+      let tasks: string[] = [];
+      if (options.extractTasks !== false) {  // デフォルトでタスク抽出を行う
+        try {
+          // ページの読み込みが完了するまで待機
+          await page.waitForLoadState('networkidle');
+          
+          // タスク要素が表示されるまで待機（最大10秒）
+          await page.waitForSelector("span.b-ib-dS-vQ", { timeout: 10000 }).catch(() => {
+            this.logger.warn("タスク要素が見つかりませんでした");
+          });
+          
+          // タスクを取得
+          tasks = await page.evaluate(() => {
+            const taskElements = document.querySelectorAll('span.b-ib-dS-vQ');
+            return Array.from(taskElements).map(el => el.textContent?.trim() || '');
+          });
+          
+          if (tasks.length > 0) {
+            this.logger.info(`${tasks.length}個のタスクが見つかりました`);
+            tasks = [...new Set(tasks.filter(t => t))]; // 重複を除去
+          }
+        } catch (error) {
+          this.logger.warn(`タスクの取得に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
       // ヘッドレスモードでない場合は、ユーザーが操作できるように待機
       if (!headless) {
         console.log("\n📌 ブラウザで操作してください。終了するには Ctrl+C を押してください。");
@@ -117,13 +163,35 @@ export class UrlCommand {
         }
       }
 
+      // JSON形式で結果を出力
+      const result = {
+        url: targetUrl,
+        opened: true,
+        headless: headless,
+        taskCount: tasks.length,
+        tasks: tasks,
+        timestamp: new Date().toISOString()
+      };
+      
+      console.log(JSON.stringify(result, null, 2));
+      
       return {
         success: true,
-        message: `✅ URLを開きました: ${targetUrl}`
+        message: `✅ URLを開きました: ${targetUrl}`,
+        url: targetUrl,
+        opened: true
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`URL開く際にエラーが発生しました: ${errorMessage}`);
+      
+      const errorResult = {
+        url: targetUrl,
+        opened: false,
+        error: errorMessage,
+        timestamp: new Date().toISOString()
+      };
+      console.log(JSON.stringify(errorResult, null, 2));
       
       return {
         success: false,
