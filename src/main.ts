@@ -2,6 +2,7 @@ import { LoginCommand } from "./commands/login.ts";
 import { LogoutCommand } from "./commands/logout.ts";
 import { StatusCommand } from "./commands/status.ts";
 import { tasksCommand } from "./commands/tasks.ts";
+import { UrlCommand } from "./commands/url.ts";
 import { Logger, LogLevel } from "./utils/logger.ts";
 import { EnvManager } from "./utils/env.ts";
 import { Config, ConfigManager } from "./core/config.ts";
@@ -35,8 +36,8 @@ function parseArgs(args: string[]): { command?: string; subcommand?: string; opt
       }
     } else if (!command) {
       command = arg;
-    } else if (!subcommand && command === "tasks") {
-      subcommand = arg; // tasks コマンドの場合、次の引数をサブコマンド（リストID）として扱う
+    } else if (!subcommand && (command === "tasks" || command === "url")) {
+      subcommand = arg; // tasks/url コマンドの場合、次の引数をサブコマンドとして扱う
     }
   }
   
@@ -52,6 +53,7 @@ function showHelp(command?: string) {
     console.log("  logout   Remember the Milkからログアウト");
     console.log("  status   ログイン状態を確認");
     console.log("  tasks    指定されたリストのタスクを取得");
+    console.log("  url      指定されたURLまたはビューを開く");
     console.log("\nオプション:");
     console.log("  --help   ヘルプを表示");
     console.log("  -v       詳細ログを出力");
@@ -93,6 +95,27 @@ function showHelp(command?: string) {
         console.log("使用方法: rtm tasks <list-id> [options]");
         console.log("\n例:");
         console.log("  rtm tasks 1375005");
+        console.log("\nオプション:");
+        console.log("  --headless       ヘッドレスモード（デフォルト: true）");
+        break;
+      case "url":
+        console.log("指定されたURLまたはビューを開く");
+        console.log("使用方法: rtm url <url|view> [options]");
+        console.log("\n例:");
+        console.log("  rtm url https://www.rememberthemilk.com/app/#search/status%3Acompleted+AND+completed%3AToday/completed");
+        console.log("  rtm url app/#inbox");
+        console.log("  rtm url completed-today");
+        console.log("\n利用可能なショートカット:");
+        console.log("  inbox            受信箱");
+        console.log("  today            今日のタスク");
+        console.log("  completed        完了済みタスク");
+        console.log("  completed-today  今日完了したタスク");
+        console.log("  overdue          期限切れタスク");
+        console.log("  week             今週のタスク");
+        console.log("  all              全てのタスク");
+        console.log("  settings         設定");
+        console.log("  lists            リスト");
+        console.log("  tags             タグ");
         console.log("\nオプション:");
         console.log("  --headless       ヘッドレスモード（デフォルト: true）");
         break;
@@ -222,6 +245,42 @@ async function handleStatusCommand(options: Record<string, any>) {
   }
 }
 
+async function handleUrlCommand(urlOrView: string, options: Record<string, any>) {
+  if (!urlOrView) {
+    console.error("❌ URLまたはビュー名が必要です。");
+    console.error("使用方法: rtm url <url|view>");
+    console.error("例: rtm url completed-today");
+    console.error("例: rtm url app/#inbox");
+    console.error("ヘルプ: rtm url --help");
+    Deno.exit(1);
+  }
+
+  const command = new UrlCommand(undefined, logger);
+  
+  try {
+    // ショートカットをチェック
+    const shortcuts = UrlCommand.getCommonUrls();
+    const targetUrl = shortcuts[urlOrView] || urlOrView;
+    
+    const headless = options.headless !== false; // デフォルトtrue
+    
+    const result = await command.execute({
+      url: targetUrl,
+      headless,
+      logger
+    });
+    
+    if (!result.success) {
+      Deno.exit(1);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(errorMessage);
+    console.error(`❌ ${errorMessage}`);
+    Deno.exit(1);
+  }
+}
+
 async function handleTasksCommand(listId: string, options: Record<string, any>) {
   if (!listId) {
     console.error("❌ リストIDが必要です。");
@@ -286,6 +345,9 @@ if (import.meta.main) {
         break;
       case "tasks":
         await handleTasksCommand(subcommand || "", options);
+        break;
+      case "url":
+        await handleUrlCommand(subcommand || "", options);
         break;
       default:
         showHelp();
