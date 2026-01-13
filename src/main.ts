@@ -9,6 +9,44 @@ import { Config, ConfigManager } from "./core/config.ts";
 
 const logger = new Logger();
 
+// 認証が必要なコマンドの前に自動ログインを試行
+async function ensureAuthenticated(options: { headless?: boolean }): Promise<boolean> {
+  const configManager = new ConfigManager();
+  const configPath = Deno.env.get("HOME") + "/.rtm/config.json";
+
+  // 既存のセッション（クッキー）をチェック
+  try {
+    const config = await configManager.load(configPath);
+    if (config.cookies && config.cookies.length > 0) {
+      logger.debug("既存のセッションクッキーが見つかりました");
+      return true;
+    }
+  } catch {
+    // 設定ファイルが存在しない場合は続行
+  }
+
+  // 環境変数が設定されている場合は自動ログイン
+  const envManager = new EnvManager();
+  if (envManager.hasCompleteCredentials()) {
+    logger.info("セッションが無効です。環境変数から自動ログインを試行します...");
+    const loginCommand = new LoginCommand(undefined, logger);
+    try {
+      const result = await loginCommand.executeWithEnvCredentials({
+        headless: options.headless !== false,
+        logger
+      });
+      console.log(result.message);
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`自動ログインに失敗しました: ${errorMessage}`);
+      return false;
+    }
+  }
+
+  return false;
+}
+
 // シンプルなCLI引数パーサー
 function parseArgs(args: string[]): { command?: string; subcommand?: string; options: Record<string, any> } {
   const options: Record<string, any> = {};
@@ -129,7 +167,7 @@ function showHelp(command?: string) {
 async function handleLoginCommand(options: Record<string, any>) {
   const command = new LoginCommand(undefined, logger);
   const envManager = new EnvManager();
-  
+
   try {
     const interactive = options.i || options.interactive;
     const useEnv = options.env;
@@ -137,33 +175,12 @@ async function handleLoginCommand(options: Record<string, any>) {
     const password = options.p || options.password;
     const save = options.s || options.save || false;
     const headless = options.headless !== false; // デフォルトtrue
-    
+
     let result;
-    
+
     if (useEnv) {
-      // 環境変数から認証情報を使用
+      // 明示的に環境変数から認証情報を使用
       result = await command.executeWithEnvCredentials({ headless, logger });
-    } else if (interactive || (!username && !password)) {
-      // インタラクティブモード
-      console.log("Remember the Milkにログインします。");
-      
-      // 環境変数が設定されている場合はデフォルト値として使用
-      const envCredentials = envManager.getCredentialsFromEnv();
-      const defaultUsername = envCredentials.username || "";
-      const defaultPassword = envCredentials.password || "";
-      
-      const usernameInput = prompt(`ユーザー名またはメールアドレス${defaultUsername ? ` (${defaultUsername})` : ""}: `) || defaultUsername;
-      const passwordInput = prompt(`パスワード${defaultPassword ? " (設定済み)" : ""}: `) || defaultPassword;
-      
-      if (!usernameInput || !passwordInput) {
-        console.error("ユーザー名とパスワードが必要です。");
-        Deno.exit(1);
-      }
-      
-      result = await command.executeInteractive({
-        username: usernameInput,
-        password: passwordInput
-      }, { headless, logger });
     } else if (username && password) {
       // コマンドライン引数から認証情報を使用
       result = await command.execute({
@@ -173,11 +190,36 @@ async function handleLoginCommand(options: Record<string, any>) {
         headless,
         logger,
       });
+    } else if (envManager.hasCompleteCredentials() && !interactive) {
+      // 環境変数が設定されている場合は自動的に使用（インタラクティブモードでない場合）
+      logger.info("環境変数から認証情報を使用します");
+      result = await command.executeWithEnvCredentials({ headless, logger });
+    } else if (interactive || (!username && !password)) {
+      // インタラクティブモード
+      console.log("Remember the Milkにログインします。");
+
+      // 環境変数が設定されている場合はデフォルト値として使用
+      const envCredentials = envManager.getCredentialsFromEnv();
+      const defaultUsername = envCredentials.username || "";
+      const defaultPassword = envCredentials.password || "";
+
+      const usernameInput = prompt(`ユーザー名またはメールアドレス${defaultUsername ? ` (${defaultUsername})` : ""}: `) || defaultUsername;
+      const passwordInput = prompt(`パスワード${defaultPassword ? " (設定済み)" : ""}: `) || defaultPassword;
+
+      if (!usernameInput || !passwordInput) {
+        console.error("ユーザー名とパスワードが必要です。");
+        Deno.exit(1);
+      }
+
+      result = await command.executeInteractive({
+        username: usernameInput,
+        password: passwordInput
+      }, { headless, logger });
     } else {
       // 保存された認証情報を使用
       result = await command.executeWithStoredCredentials({ headless, logger });
     }
-    
+
     console.log(result.message);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -247,7 +289,7 @@ async function handleStatusCommand(options: Record<string, any>) {
 
 async function handleUrlCommand(urlOrView: string, options: Record<string, any>) {
   if (!urlOrView) {
-    console.error("❌ URLまたはビュー名が必要です。");
+    console.error("URLまたはビュー名が必要です。");
     console.error("使用方法: rtm url <url|view>");
     console.error("例: rtm url completed-today");
     console.error("例: rtm url app/#inbox");
@@ -255,21 +297,24 @@ async function handleUrlCommand(urlOrView: string, options: Record<string, any>)
     Deno.exit(1);
   }
 
+  const headless = options.headless !== false; // デフォルトtrue
+
+  // 自動ログインを試行
+  await ensureAuthenticated({ headless });
+
   const command = new UrlCommand(undefined, logger);
-  
+
   try {
     // ショートカットをチェック
     const shortcuts = UrlCommand.getCommonUrls();
     const targetUrl = shortcuts[urlOrView] || urlOrView;
-    
-    const headless = options.headless !== false; // デフォルトtrue
-    
+
     const result = await command.execute({
       url: targetUrl,
       headless,
       logger
     });
-    
+
     if (!result.success) {
       Deno.exit(1);
     }
@@ -283,16 +328,21 @@ async function handleUrlCommand(urlOrView: string, options: Record<string, any>)
 
 async function handleTasksCommand(listId: string, options: Record<string, any>) {
   if (!listId) {
-    console.error("❌ リストIDが必要です。");
+    console.error("リストIDが必要です。");
     console.error("使用方法: rtm tasks <list-id>");
     console.error("例: rtm tasks 1375005");
     Deno.exit(1);
   }
-  
+
+  const headless = options.headless !== false; // デフォルトtrue
+
+  // 自動ログインを試行
+  await ensureAuthenticated({ headless });
+
   try {
     const configManager = new ConfigManager();
     const configPath = Deno.env.get("HOME") + "/.rtm/config.json";
-    
+
     let config: Config;
     try {
       config = await configManager.load(configPath);
@@ -300,9 +350,7 @@ async function handleTasksCommand(listId: string, options: Record<string, any>) 
       // 設定ファイルが存在しない場合はデフォルト設定を使用
       config = configManager.getDefault();
     }
-    
-    const headless = options.headless !== false; // デフォルトtrue
-    
+
     await tasksCommand.action({
       config,
       listId,
