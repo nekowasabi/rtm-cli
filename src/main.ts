@@ -196,25 +196,45 @@ async function handleLoginCommand(options: Record<string, any>) {
       result = await command.executeWithEnvCredentials({ headless, logger });
     } else if (interactive || (!username && !password)) {
       // インタラクティブモード
-      console.log("Remember the Milkにログインします。");
-
-      // 環境変数が設定されている場合はデフォルト値として使用
       const envCredentials = envManager.getCredentialsFromEnv();
       const defaultUsername = envCredentials.username || "";
       const defaultPassword = envCredentials.password || "";
 
-      const usernameInput = prompt(`ユーザー名またはメールアドレス${defaultUsername ? ` (${defaultUsername})` : ""}: `) || defaultUsername;
-      const passwordInput = prompt(`パスワード${defaultPassword ? " (設定済み)" : ""}: `) || defaultPassword;
+      // ユーザー名入力
+      const usernamePrompt = defaultUsername
+        ? `ユーザー名またはメールアドレス (${defaultUsername}): `
+        : "ユーザー名またはメールアドレス: ";
+      const usernameInput = prompt(usernamePrompt);
 
-      if (!usernameInput || !passwordInput) {
-        console.error("ユーザー名とパスワードが必要です。");
+      // null = キャンセル、空文字 = Enter押下
+      const finalUsername = usernameInput === null
+        ? defaultUsername  // キャンセル時はデフォルト使用
+        : (usernameInput.trim() || defaultUsername);  // 空入力もデフォルト使用
+
+      if (!finalUsername) {
+        logger.error("ユーザー名が入力されていません。");
         Deno.exit(1);
       }
 
-      result = await command.executeInteractive({
-        username: usernameInput,
-        password: passwordInput
-      }, { headless, logger });
+      // パスワード入力
+      const passwordPrompt = defaultPassword
+        ? "パスワード (設定済み): "
+        : "パスワード: ";
+      const passwordInput = prompt(passwordPrompt);
+
+      const finalPassword = passwordInput === null
+        ? defaultPassword
+        : (passwordInput.trim() || defaultPassword);
+
+      if (!finalPassword) {
+        logger.error("パスワードが入力されていません。環境変数 RTM_PASSWORD を設定するか、-p オプションで指定してください。");
+        Deno.exit(1);
+      }
+
+      result = await command.executeInteractive(
+        { username: finalUsername, password: finalPassword },
+        { headless, logger }
+      );
     } else {
       // 保存された認証情報を使用
       result = await command.executeWithStoredCredentials({ headless, logger });
